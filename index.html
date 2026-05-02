@@ -212,6 +212,24 @@
   .cart-summary-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 14px; color: var(--text-muted); }
   .cart-summary-total { font-family: var(--font-display); font-size: 22px; color: var(--accent); font-weight: 700; }
   .cart-summary-divider { height: 1px; background: var(--border); margin: 10px 0; }
+  
+  /* -adding status ui- */
+  .order-card {
+    transition: all 0.3s ease;
+  }
+
+  .order-accepted {
+    background: rgba(82, 183, 136, 0.4); /* green transparent */
+  }
+
+  .order-rejected {
+    background: rgba(230, 57, 70, 0.4); /* red transparent */
+  }
+
+  .order-disabled button {
+    pointer-events: none;
+    opacity: 0.5;
+  }
 
   /* ── MODAL ── */
   .modal-overlay {
@@ -453,7 +471,7 @@
   </div>
 </div>
 
-//firebase script 
+<!-- firebase script -->
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
@@ -857,7 +875,8 @@ function renderCart() {
     const lineTotal = p.price * item.qty;
     subtotal += lineTotal;
     const el = document.createElement('div');
-    el.className = 'cart-item';
+    el.className = 'cart-item order-card';
+    
     el.id = `ci-${item.id}`;
     el.innerHTML = `
       ${p.img
@@ -1014,8 +1033,19 @@ function renderAdminOrders() {
   empty.style.display = 'none';
 
   orders.slice().reverse().forEach(order => {
+    let statusClass = '';
+    let buttonsDisabled = '';
+
+    if (order.status === 'accepted') {
+      statusClass = 'order-accepted order-disabled';
+      buttonsDisabled = 'disabled';
+    } else if (order.status === 'rejected') {
+      statusClass = 'order-rejected order-disabled';
+      buttonsDisabled = 'disabled';
+    }
     const el = document.createElement('div');
-    el.className = 'cart-item';
+    el.className = `cart-item order-card ${statusClass}`;
+    el.id = `order-${order.id}`;
 
     el.innerHTML = `
       <div style="flex:1">
@@ -1030,8 +1060,8 @@ function renderAdminOrders() {
       </div>
 
       <div style="display:flex;flex-direction:column;gap:6px">
-        <button class="btn btn-sm btn-secondary" onclick="acceptOrder('${order.id}')">✔</button>
-        <button class="btn btn-sm btn-danger" onclick="rejectOrder('${order.id}')">✖</button>
+        <button class="btn btn-sm btn-secondary" ${buttonsDisabled} onclick="acceptOrder('${order.id}')">✔</button>
+        <button class="btn btn-sm btn-danger" ${buttonsDisabled} onclick="rejectOrder('${order.id}')">✖</button>
       </div>
     `;
 
@@ -1040,37 +1070,58 @@ function renderAdminOrders() {
 }
 //for accepting order
 function acceptOrder(orderId) {
-  db.collection("orders").doc(orderId).delete();
+  const card = document.getElementById(`order-${orderId}`);
+  if (!card) return;
 
-  renderAdminOrders();
-  showToast('Order delivered ✅');
+  // 🚫 stop multiple clicks
+  if (card.classList.contains('order-disabled')) return;
+
+  // 🎨 apply green + disable
+  card.classList.add('order-accepted', 'order-disabled');
+
+  // 🔒 disable buttons
+  card.querySelectorAll('button').forEach(btn => btn.disabled = true);
+
+  // ⏳ delay so user can see color
+  setTimeout(() => {
+    db.collection("orders").doc(orderId).update({status: "accepted"});
+    showToast('Order delivered ✅');
+  }, 1000);
 }
 
 //for rejecting order
 function rejectOrder(orderId) {
+  const card = document.getElementById(`order-${orderId}`);
+  if (!card) return;
+
+  if (card.classList.contains('order-disabled')) return;
+
+  // 🔴 UI effect
+  card.classList.add('order-rejected', 'order-disabled');
+
+  // disable buttons
+  card.querySelectorAll('button').forEach(btn => btn.disabled = true);
+
   const order = orders.find(o => o.id === orderId);
   if (!order) return;
 
-  order.items.forEach(item => {
-  const p = products.find(x => x.id === item.id);
-  if (p) {
-    const newStock = p.stock + item.qty;
-
-    // 🔥 update Firebase
-    db.collection("products").doc(p.id).update({
-      stock: newStock
+  setTimeout(() => {
+    // restore stock
+    order.items.forEach(item => {
+      const p = products.find(x => x.id === item.id);
+      if (p) {
+        db.collection("products").doc(p.id).update({
+          stock: p.stock + item.qty
+        });
+      }
     });
-  }
-});
 
-  // ❌ remove order
-  db.collection("orders").doc(orderId).delete();
+    // delete only once ✅
+    db.collection("orders").doc(orderId).update({status: "rejected"});
+    showToast('Order rejected 🔄');
 
-  renderAdminOrders();
-  renderProducts(); // update UI stock
-  showToast('Order rejected & stock restored 🔄');
+  }, 1000);
 }
-
 // Delete product
 function deleteProduct(id) {
   const confirmDelete = confirm("Delete this product?");
