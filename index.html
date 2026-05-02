@@ -453,12 +453,52 @@
   </div>
 </div>
 
+//firebase script 
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyCtTfRvQeqMIsR5km2dmoFBsQ4Ex_4d_1g",
+  authDomain: "hostel-cart.firebaseapp.com",
+  projectId: "hostel-cart",
+  storageBucket: "hostel-cart.firebasestorage.app",
+  messagingSenderId: "872876999717",
+  appId: "1:872876999717:web:a45e1889a4fd6b1a45ebcc",
+  measurementId: "G-GLFMTE89MY"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+</script>
+
 <script>
 /* ─── STATE ─── */
 let user   = JSON.parse(localStorage.getItem('fc_user')   || 'null');
-let products = JSON.parse(localStorage.getItem('fc_products') || '[]');
+let products = [];
+
+db.collection("products").onSnapshot(snapshot => {
+  products = snapshot.docs.map(doc => ({
+    id: doc.id,
+    ...doc.data()
+  }));
+
+  renderProducts();
+});
 let cart   = JSON.parse(localStorage.getItem('fc_cart')   || '[]');  // [{id, qty}]
-let orders = JSON.parse(localStorage.getItem('fc_orders') || '[]');
+
+let orders = [];
+
+db.collection("orders").onSnapshot(snapshot => {
+  orders = snapshot.docs.map(doc => ({
+    id: doc.id,
+    ...doc.data()
+  }));
+
+  renderAdminOrders();
+});
+
 let stockMemory = {}; // stores previous stock
 const orderSound = new Audio("https://www.soundjay.com/buttons/sounds/button-09.mp3");
 
@@ -661,8 +701,12 @@ function submitAddProduct() {
 
   const product = { id: Date.now().toString(), name, price, img, stock };
 
-  products.push(product);
-  save('fc_products', products);
+
+  db.collection("products").add({
+  name,
+  price,
+  img,
+  stock});
   closeModalForce();
   renderProducts();
   showToast(`"${name}" added!`);
@@ -772,7 +816,9 @@ function toggleStock(id) {
     }
   }
 
-  save('fc_products', products);
+  db.collection("products").doc(id).update({
+    stock: product.stock
+  });
   renderProducts();
 }
 function updateCartFab() {
@@ -875,22 +921,25 @@ if (!confirmOrder) return;
     timestamp: new Date().toLocaleString()
   };
   
-  items.forEach(item => {
+ items.forEach(item => {
     const p = products.find(x => x.id === item.id);
     if (!p) return;
 
+    let newStock;
+
     if (user.role === 'admin') {
-      // 👑 ADMIN = RESTOCK
-      p.stock += item.qty;
+      newStock = p.stock + item.qty; // restock
     } else {
-      // 👤 USER = PURCHASE
-      p.stock -= item.qty;
-      if (p.stock < 0) p.stock = 0;
+      newStock = p.stock - item.qty; // purchase
+      if (newStock < 0) newStock = 0;
     }
+
+    // 🔥 UPDATE FIREBASE (this is the fix)
+    db.collection("products").doc(p.id).update({
+      stock: newStock
+    });
   });
-save('fc_products', products);
-  orders.push(order);
-  save('fc_orders', orders);
+  db.collection("orders").add(order);
 
   // clear cart
   cart = [];
@@ -921,7 +970,7 @@ function goHomeAfterOrder() {
 function checkNewOrders() {
   if (!user || user.role !== 'admin') return;
 
-  const currentOrders = JSON.parse(localStorage.getItem('fc_orders') || '[]');
+  const currentOrders = orders;
 
   if (!currentOrders.length) return;
 
@@ -953,7 +1002,7 @@ function renderAdminOrders() {
   const list = document.getElementById('admin-orders-list');
   const empty = document.getElementById('admin-orders-empty');
 
-  orders = JSON.parse(localStorage.getItem('fc_orders') || '[]');
+  
 
   list.innerHTML = '';
 
@@ -991,8 +1040,7 @@ function renderAdminOrders() {
 }
 //for accepting order
 function acceptOrder(orderId) {
-  orders = orders.filter(o => o.id !== orderId);
-  save('fc_orders', orders);
+  db.collection("orders").doc(orderId).delete();
 
   renderAdminOrders();
   showToast('Order delivered ✅');
@@ -1003,19 +1051,20 @@ function rejectOrder(orderId) {
   const order = orders.find(o => o.id === orderId);
   if (!order) return;
 
-  // 🔁 restore stock
   order.items.forEach(item => {
-    const p = products.find(x => x.id === item.id);
-    if (p) {
-      p.stock += item.qty;
-    }
-  });
+  const p = products.find(x => x.id === item.id);
+  if (p) {
+    const newStock = p.stock + item.qty;
 
-  save('fc_products', products);
+    // 🔥 update Firebase
+    db.collection("products").doc(p.id).update({
+      stock: newStock
+    });
+  }
+});
 
   // ❌ remove order
-  orders = orders.filter(o => o.id !== orderId);
-  save('fc_orders', orders);
+  db.collection("orders").doc(orderId).delete();
 
   renderAdminOrders();
   renderProducts(); // update UI stock
@@ -1027,8 +1076,7 @@ function deleteProduct(id) {
   const confirmDelete = confirm("Delete this product?");
   if (!confirmDelete) return;
 
-  products = products.filter(p => p.id !== id);
-  save('fc_products', products);
+  db.collection("products").doc(id).delete();
 
   renderProducts();
   showToast("Product deleted 🗑️");
@@ -1047,33 +1095,13 @@ function editProduct(id) {
     return;
   }
 
-  product.name = newName.trim();
-  product.price = parseFloat(newPrice);
+  db.collection("products").doc(id).update({
+    name: newName.trim(),
+    price: parseFloat(newPrice)
+  });
 
-  save('fc_products', products);
   renderProducts();
   showToast("Product updated ✏️");
-}
-function toggleStock(id) {
-  if (!user || user.role !== 'admin') return;
-
-  const product = products.find(p => p.id === id);
-  if (!product) return;
-
-  if (product.stock > 0) {
-    stockMemory[id] = product.stock;
-    product.stock = 0;
-  } else {
-    if (stockMemory[id] !== undefined) {
-      product.stock = stockMemory[id];
-      delete stockMemory[id];
-    } else {
-      product.stock = 1;
-    }
-  }
-
-  save('fc_products', products);
-  renderProducts();
 }
 
 /* ─── BOOT ─── */
